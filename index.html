@@ -1088,24 +1088,73 @@ class App {
       }
     });
 
-    // Canvas click — edit initial row
-    this.canvas.addEventListener('click', (e) => {
-      if (!this.started || this.playing || this.rows.length > 1) return;
+    // Canvas painting — draw initial row by clicking or dragging
+    let painting = false;
+    let paintValue = 1;
+    let lastPaintCol = -1;
+
+    const canEdit = () => this.started && !this.playing && this.rows.length <= 1;
+
+    const hitCell = (clientX, clientY) => {
       const rect = this.canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
       const { cellSize, offsetX, topPad } = this._getGridLayout();
       const col = Math.floor((x - offsetX) / cellSize);
       const row = Math.floor((y - topPad) / cellSize);
-      if (col >= 0 && col < this.numCells && row === 0) {
-        this.rows[0][col] = this.rows[0][col] ? 0 : 1;
-        // Preview note
-        if (this.audio.ctx && this.rows[0][col]) {
-          const freq = this.audio.cellToFreq(col, this.numCells, this.scaleIntervals);
-          this.audio._playNote(freq, this.audio.ctx.currentTime, 0.4, 0.12, this.voice);
-        }
+      if (col >= 0 && col < this.numCells && row === 0) return col;
+      return -1;
+    };
+
+    const paintCell = (col) => {
+      if (col < 0 || col === lastPaintCol) return;
+      lastPaintCol = col;
+      this.rows[0][col] = paintValue;
+      if (this.audio.ctx && paintValue) {
+        const freq = this.audio.cellToFreq(col, this.numCells, this.scaleIntervals);
+        const pan = this.numCells > 1 ? (col / (this.numCells - 1)) * 2 - 1 : 0;
+        this.audio._playNote(freq, this.audio.ctx.currentTime, 0.25, 0.08, this.voice, pan * 0.5);
       }
+    };
+
+    const startPaint = (clientX, clientY) => {
+      if (!canEdit()) return;
+      const col = hitCell(clientX, clientY);
+      if (col < 0) return;
+      painting = true;
+      lastPaintCol = -1;
+      paintValue = this.rows[0][col] ? 0 : 1;
+      paintCell(col);
+    };
+
+    const movePaint = (clientX, clientY) => {
+      if (!painting) return;
+      const col = hitCell(clientX, clientY);
+      if (col >= 0) paintCell(col);
+    };
+
+    const endPaint = () => { painting = false; lastPaintCol = -1; };
+
+    // Mouse
+    this.canvas.addEventListener('mousedown', (e) => startPaint(e.clientX, e.clientY));
+    this.canvas.addEventListener('mousemove', (e) => {
+      movePaint(e.clientX, e.clientY);
+      this.canvas.style.cursor = canEdit() && hitCell(e.clientX, e.clientY) >= 0 ? 'crosshair' : 'default';
     });
+    window.addEventListener('mouseup', endPaint);
+
+    // Touch
+    this.canvas.addEventListener('touchstart', (e) => {
+      if (!canEdit()) return;
+      e.preventDefault();
+      startPaint(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    this.canvas.addEventListener('touchmove', (e) => {
+      if (!painting) return;
+      e.preventDefault();
+      movePaint(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    this.canvas.addEventListener('touchend', endPaint);
 
     // Resize
     window.addEventListener('resize', () => {
