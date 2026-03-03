@@ -338,6 +338,11 @@
   </button>
 
   <div class="ctrl-group">
+    <label>Preset</label>
+    <select class="ctrl-select" id="sel-preset"></select>
+  </div>
+
+  <div class="ctrl-group">
     <label>Rule</label>
     <select class="ctrl-select" id="sel-rule"></select>
   </div>
@@ -434,6 +439,18 @@ const SCALES = {
 };
 
 const VOICES = ['Bell', 'Glass', 'Soft', 'Pluck'];
+
+const PRESETS = [
+  { name: '— Presets —', rule: null },
+  { name: 'Fractal Bells', rule: 90, scale: 'Pentatonic', voice: 'Bell', tempo: 120, cells: 48, init: 'single' },
+  { name: 'Chaos Garden', rule: 30, scale: 'Hirajoshi', voice: 'Glass', tempo: 80, cells: 36, init: 'random' },
+  { name: 'Digital Rain', rule: 110, scale: 'Minor Pent.', voice: 'Soft', tempo: 140, cells: 48, init: 'single' },
+  { name: 'Traffic Flow', rule: 184, scale: 'Blues', voice: 'Pluck', tempo: 160, cells: 32, init: 'random' },
+  { name: 'Crystal Lattice', rule: 150, scale: 'Whole Tone', voice: 'Glass', tempo: 100, cells: 48, init: 'alternating' },
+  { name: 'Diamond Mine', rule: 105, scale: 'Major', voice: 'Bell', tempo: 90, cells: 40, init: 'thirds' },
+  { name: 'Nested Dreams', rule: 22, scale: 'Dorian', voice: 'Soft', tempo: 110, cells: 48, init: 'single' },
+  { name: 'Sparse Signal', rule: 225, scale: 'Pentatonic', voice: 'Bell', tempo: 60, cells: 24, init: 'single' },
+];
 
 // ════════════════════════════════════════════════════════════════
 // COLOR UTILITIES
@@ -579,7 +596,7 @@ class AudioEngine {
   }
 
   /**
-   * Play a row of cells
+   * Play a row of cells with density-aware limiting and stereo panning
    */
   playRow(row, scaleIntervals, voice, time, beatDuration) {
     if (!this.ctx) return;
@@ -590,33 +607,54 @@ class AudioEngine {
     }
     if (activeCells.length === 0) return;
 
-    const numActive = activeCells.length;
-    // Scale gain by number of active cells to prevent clipping
-    const noteGain = Math.min(0.25, 1.2 / Math.sqrt(numActive));
-    const noteDuration = Math.min(beatDuration * 2, 1.5);
+    // Limit simultaneous notes for dense rows
+    const maxNotes = 16;
+    let cellsToPlay = activeCells;
+    if (activeCells.length > maxNotes) {
+      cellsToPlay = [];
+      for (let i = 0; i < maxNotes; i++) {
+        cellsToPlay.push(activeCells[Math.floor(i * activeCells.length / maxNotes)]);
+      }
+    }
 
-    for (const cellIdx of activeCells) {
+    const density = activeCells.length / row.length;
+    const noteGain = Math.min(0.25, 1.2 / Math.sqrt(cellsToPlay.length));
+    // Shorter notes for dense rows to prevent muddiness
+    const baseDuration = Math.min(beatDuration * 2, 1.5);
+    const noteDuration = baseDuration * Math.max(0.35, 1 - density * 0.5);
+
+    for (const cellIdx of cellsToPlay) {
       const freq = this.cellToFreq(cellIdx, row.length, scaleIntervals);
-      this._playNote(freq, time, noteDuration, noteGain, voice);
+      // Stereo pan: left (low) to right (high)
+      const pan = row.length > 1 ? (cellIdx / (row.length - 1)) * 2 - 1 : 0;
+      this._playNote(freq, time, noteDuration, noteGain, voice, pan * 0.65);
     }
   }
 
-  _playNote(freq, time, duration, gain, voice) {
+  _playNote(freq, time, duration, gain, voice, pan = 0) {
     switch (voice) {
-      case 'Bell': this._bell(freq, time, duration, gain); break;
-      case 'Glass': this._glass(freq, time, duration, gain); break;
-      case 'Soft': this._soft(freq, time, duration, gain); break;
-      case 'Pluck': this._pluck(freq, time, duration, gain); break;
-      default: this._bell(freq, time, duration, gain);
+      case 'Bell': this._bell(freq, time, duration, gain, pan); break;
+      case 'Glass': this._glass(freq, time, duration, gain, pan); break;
+      case 'Soft': this._soft(freq, time, duration, gain, pan); break;
+      case 'Pluck': this._pluck(freq, time, duration, gain, pan); break;
+      default: this._bell(freq, time, duration, gain, pan);
     }
   }
 
-  _connectNote(node) {
-    node.connect(this.masterGain);
-    node.connect(this.reverbGain);
+  _connectNote(node, pan = 0) {
+    if (pan !== 0 && this.ctx.createStereoPanner) {
+      const panner = this.ctx.createStereoPanner();
+      panner.pan.value = pan;
+      node.connect(panner);
+      panner.connect(this.masterGain);
+      panner.connect(this.reverbGain);
+    } else {
+      node.connect(this.masterGain);
+      node.connect(this.reverbGain);
+    }
   }
 
-  _bell(freq, time, dur, amp) {
+  _bell(freq, time, dur, amp, pan) {
     const ctx = this.ctx;
     const partials = [1, 2.756, 4.07, 5.404];
     const amps = [1, 0.5, 0.3, 0.15];
@@ -632,20 +670,19 @@ class AudioEngine {
       g.gain.linearRampToValueAtTime(a, time + 0.004);
       g.gain.exponentialRampToValueAtTime(0.0001, time + dur * decays[i]);
       osc.connect(g);
-      this._connectNote(g);
+      this._connectNote(g, pan);
       osc.start(time);
       osc.stop(time + dur * decays[i] + 0.05);
     }
   }
 
-  _glass(freq, time, dur, amp) {
+  _glass(freq, time, dur, amp, pan) {
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.value = freq;
 
-    // Gentle vibrato
     const lfo = ctx.createOscillator();
     const lfoGain = ctx.createGain();
     lfo.frequency.value = 4.5;
@@ -659,12 +696,12 @@ class AudioEngine {
     g.gain.linearRampToValueAtTime(amp * 0.5, time + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, time + dur * 1.2);
     osc.connect(g);
-    this._connectNote(g);
+    this._connectNote(g, pan);
     osc.start(time);
     osc.stop(time + dur * 1.2 + 0.05);
   }
 
-  _soft(freq, time, dur, amp) {
+  _soft(freq, time, dur, amp, pan) {
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     const filter = ctx.createBiquadFilter();
@@ -681,12 +718,12 @@ class AudioEngine {
     g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
     osc.connect(filter);
     filter.connect(g);
-    this._connectNote(g);
+    this._connectNote(g, pan);
     osc.start(time);
     osc.stop(time + dur + 0.05);
   }
 
-  _pluck(freq, time, dur, amp) {
+  _pluck(freq, time, dur, amp, pan) {
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     const filter = ctx.createBiquadFilter();
@@ -703,7 +740,7 @@ class AudioEngine {
     g.gain.exponentialRampToValueAtTime(0.0001, time + dur * 0.6);
     osc.connect(filter);
     filter.connect(g);
-    this._connectNote(g);
+    this._connectNote(g, pan);
     osc.start(time);
     osc.stop(time + dur * 0.6 + 0.05);
   }
@@ -896,6 +933,16 @@ class App {
   }
 
   _initControls() {
+    // Populate preset select
+    const selPreset = document.getElementById('sel-preset');
+    PRESETS.forEach((p, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = p.name;
+      if (i === 0) opt.disabled = true;
+      selPreset.appendChild(opt);
+    });
+
     // Populate rule select
     const selRule = document.getElementById('sel-rule');
     RULES.forEach((r, i) => {
@@ -930,6 +977,37 @@ class App {
 
     // Play/pause
     this.playBtn.addEventListener('click', () => this._togglePlay());
+
+    // Preset change
+    document.getElementById('sel-preset').addEventListener('change', (e) => {
+      const idx = parseInt(e.target.value);
+      const p = PRESETS[idx];
+      if (!p.rule) return;
+      // Apply all settings
+      const ruleIdx = RULES.findIndex(r => r.num === p.rule);
+      if (ruleIdx >= 0) {
+        this.ruleIdx = ruleIdx; this.ruleNum = p.rule;
+        document.getElementById('sel-rule').value = ruleIdx;
+        this._updateRuleInfo();
+      }
+      this.scaleName = p.scale; this.scaleIntervals = SCALES[p.scale];
+      document.getElementById('sel-scale').value = p.scale;
+      this.voice = p.voice;
+      document.getElementById('sel-voice').value = p.voice;
+      this.tempo = p.tempo;
+      document.getElementById('rng-tempo').value = p.tempo;
+      document.getElementById('val-tempo').textContent = p.tempo;
+      this.numCells = p.cells;
+      document.getElementById('rng-cells').value = p.cells;
+      document.getElementById('val-cells').textContent = p.cells;
+      this.initMode = p.init;
+      document.getElementById('sel-init').value = p.init;
+      this._reset();
+      if (this.playing) { this._stopScheduler(); this._startScheduler(); }
+      this._saveToHash();
+      // Reset preset select to label
+      e.target.value = 0;
+    });
 
     // Rule change
     document.getElementById('sel-rule').addEventListener('change', (e) => {
