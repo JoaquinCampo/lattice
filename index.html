@@ -105,6 +105,20 @@
       max-width: 280px;
       line-height: 1.4;
     }
+    #info .gen-count {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      margin-top: 0.6em;
+      font-variant-numeric: tabular-nums;
+    }
+    #info .edit-hint {
+      font-size: 0.6rem;
+      color: var(--accent);
+      margin-top: 0.4em;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    #info .edit-hint.visible { opacity: 1; }
 
     /* Controls panel */
     #controls {
@@ -298,6 +312,8 @@
   <h1>Lattice</h1>
   <span class="rule-name" id="rule-label">Rule 90</span>
   <div class="rule-desc" id="rule-desc">Sierpinski triangle — fractal pattern from XOR</div>
+  <div class="gen-count" id="gen-count"></div>
+  <div class="edit-hint" id="edit-hint">click cells to set starting pattern</div>
 </div>
 
 <div id="controls">
@@ -839,11 +855,15 @@ class App {
     this.iconPause = document.getElementById('icon-pause');
     this.ruleLabel = document.getElementById('rule-label');
     this.ruleDesc = document.getElementById('rule-desc');
+    this.genCount = document.getElementById('gen-count');
+    this.editHint = document.getElementById('edit-hint');
+    this.generation = 0;
 
     this._initControls();
     this._bindEvents();
     this._reset();
     this._render();
+    this._updateEditHint();
   }
 
   _initControls() {
@@ -950,6 +970,25 @@ class App {
       }
     });
 
+    // Canvas click — edit initial row
+    this.canvas.addEventListener('click', (e) => {
+      if (!this.started || this.playing || this.rows.length > 1) return;
+      const rect = this.canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const { cellSize, offsetX, topPad } = this._getGridLayout();
+      const col = Math.floor((x - offsetX) / cellSize);
+      const row = Math.floor((y - topPad) / cellSize);
+      if (col >= 0 && col < this.numCells && row === 0) {
+        this.rows[0][col] = this.rows[0][col] ? 0 : 1;
+        // Preview note
+        if (this.audio.ctx && this.rows[0][col]) {
+          const freq = this.audio.cellToFreq(col, this.numCells, this.scaleIntervals);
+          this.audio._playNote(freq, this.audio.ctx.currentTime, 0.4, 0.12, this.voice);
+        }
+      }
+    });
+
     // Resize
     window.addEventListener('resize', () => {
       this.renderer.resize();
@@ -1039,6 +1078,9 @@ class App {
     const initial = createInitialRow(this.numCells, this.initMode);
     this.rows.push(initial);
     this.scrollOffset = 0;
+    this.generation = 0;
+    this.genCount.textContent = '';
+    this._updateEditHint();
   }
 
   _togglePlay() {
@@ -1053,6 +1095,7 @@ class App {
       this._startScheduler();
     } else {
       this._stopScheduler();
+      this._updateEditHint();
     }
   }
 
@@ -1062,10 +1105,35 @@ class App {
     this.ruleDesc.textContent = rule.desc;
   }
 
+  _updateEditHint() {
+    const canEdit = this.started && !this.playing && this.rows.length <= 1;
+    this.editHint.classList.toggle('visible', canEdit);
+    this.canvas.style.cursor = canEdit ? 'crosshair' : 'default';
+  }
+
+  _getGridLayout() {
+    const W = this.renderer.width;
+    const H = this.renderer.height;
+    const padding = Math.max(16, W * 0.03);
+    const availW = W - padding * 2;
+    const cellSize = Math.floor(availW / this.numCells);
+    const gridW = cellSize * this.numCells;
+    const offsetX = Math.floor((W - gridW) / 2);
+    const topPad = 60;
+    return { cellSize, gridW, offsetX, topPad };
+  }
+
   _startScheduler() {
     if (!this.audio.ctx) return;
     this.nextNoteTime = this.audio.ctx.currentTime + 0.05;
     this.lastBeatTime = this.nextNoteTime;
+
+    // Play the current initial row first
+    const beatDur = 60.0 / this.tempo;
+    const currentRow = this.rows[this.rows.length - 1];
+    this.audio.playRow(currentRow, this.scaleIntervals, this.voice, this.nextNoteTime, beatDur);
+    this.lastBeatTime = this.nextNoteTime;
+    this.nextNoteTime += beatDur;
 
     const schedule = () => {
       while (this.nextNoteTime < this.audio.ctx.currentTime + this.scheduleAheadTime) {
@@ -1078,6 +1146,7 @@ class App {
 
     this.schedulerInterval = setInterval(schedule, 25);
     schedule();
+    this._updateEditHint();
   }
 
   _stopScheduler() {
@@ -1092,6 +1161,8 @@ class App {
     const lastRow = this.rows[this.rows.length - 1];
     const nextRow = evolveRow(lastRow, this.ruleNum);
     this.rows.push(nextRow);
+    this.generation++;
+    this.genCount.textContent = `Generation ${this.generation}`;
 
     // Play audio for the new row
     const beatDur = 60.0 / this.tempo;
