@@ -4,6 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Lattice — Cellular Automata as Music</title>
+  <meta name="description" content="Cellular automata as music — watch simple rules evolve into complex visual patterns, hear them as generative compositions in real time.">
+  <meta property="og:title" content="Lattice — Cellular Automata as Music">
+  <meta property="og:description" content="Watch simple rules evolve into complex patterns. Hear them as generative compositions in real time.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#08080c">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23111'/><rect x='4' y='4' width='8' height='8' rx='2' fill='%237b8cff'/><rect x='20' y='4' width='8' height='8' rx='2' fill='%2300b4d8'/><rect x='12' y='12' width='8' height='8' rx='2' fill='%23f9a825'/><rect x='4' y='20' width='8' height='8' rx='2' fill='%2300b4d8'/><rect x='20' y='20' width='8' height='8' rx='2' fill='%237b8cff'/></svg>">
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -360,6 +366,7 @@
       <option value="random">Random</option>
       <option value="alternating">Alternating</option>
       <option value="thirds">Every Third</option>
+      <option value="draw">Draw</option>
     </select>
   </div>
 
@@ -372,6 +379,7 @@
     </div>
   </div>
 
+  <button class="reset-btn" id="btn-export" title="Save image">Export</button>
   <button class="reset-btn" id="btn-reset">Reset</button>
 </div>
 
@@ -479,6 +487,9 @@ function createInitialRow(width, mode) {
       break;
     case 'thirds':
       for (let i = 0; i < width; i++) row[i] = i % 3 === 0 ? 1 : 0;
+      break;
+    case 'draw':
+      // Empty — user draws manually
       break;
   }
   return row;
@@ -861,6 +872,7 @@ class App {
 
     this._initControls();
     this._bindEvents();
+    this._loadFromHash();
     this._reset();
     this._render();
     this._updateEditHint();
@@ -912,17 +924,20 @@ class App {
         this._stopScheduler();
         this._startScheduler();
       }
+      this._saveToHash();
     });
 
     // Scale change
     document.getElementById('sel-scale').addEventListener('change', (e) => {
       this.scaleName = e.target.value;
       this.scaleIntervals = SCALES[this.scaleName];
+      this._saveToHash();
     });
 
     // Voice change
     document.getElementById('sel-voice').addEventListener('change', (e) => {
       this.voice = e.target.value;
+      this._saveToHash();
     });
 
     // Tempo
@@ -931,6 +946,7 @@ class App {
     rngTempo.addEventListener('input', (e) => {
       this.tempo = parseInt(e.target.value);
       valTempo.textContent = this.tempo;
+      this._saveToHash();
     });
 
     // Cells
@@ -944,6 +960,7 @@ class App {
         this._stopScheduler();
         this._startScheduler();
       }
+      this._saveToHash();
     });
 
     // Init mode
@@ -954,6 +971,12 @@ class App {
         this._stopScheduler();
         this._startScheduler();
       }
+      this._saveToHash();
+    });
+
+    // Export
+    document.getElementById('btn-export').addEventListener('click', () => {
+      this._exportImage();
     });
 
     // Volume
@@ -1121,6 +1144,61 @@ class App {
     const offsetX = Math.floor((W - gridW) / 2);
     const topPad = 60;
     return { cellSize, gridW, offsetX, topPad };
+  }
+
+  _saveToHash() {
+    const p = new URLSearchParams({
+      r: this.ruleNum, s: this.scaleName, v: this.voice,
+      t: this.tempo, c: this.numCells, i: this.initMode,
+    });
+    history.replaceState(null, '', '#' + p.toString());
+  }
+
+  _loadFromHash() {
+    if (!location.hash) return;
+    try {
+      const p = new URLSearchParams(location.hash.slice(1));
+      if (p.has('r')) {
+        const num = parseInt(p.get('r'));
+        const idx = RULES.findIndex(r => r.num === num);
+        if (idx >= 0) {
+          this.ruleIdx = idx; this.ruleNum = num;
+          document.getElementById('sel-rule').value = idx;
+          this._updateRuleInfo();
+        }
+      }
+      if (p.has('s') && SCALES[p.get('s')]) {
+        this.scaleName = p.get('s');
+        this.scaleIntervals = SCALES[this.scaleName];
+        document.getElementById('sel-scale').value = this.scaleName;
+      }
+      if (p.has('v') && VOICES.includes(p.get('v'))) {
+        this.voice = p.get('v');
+        document.getElementById('sel-voice').value = this.voice;
+      }
+      if (p.has('t')) {
+        this.tempo = Math.max(30, Math.min(300, parseInt(p.get('t'))));
+        document.getElementById('rng-tempo').value = this.tempo;
+        document.getElementById('val-tempo').textContent = this.tempo;
+      }
+      if (p.has('c')) {
+        this.numCells = Math.max(12, Math.min(72, parseInt(p.get('c'))));
+        document.getElementById('rng-cells').value = this.numCells;
+        document.getElementById('val-cells').textContent = this.numCells;
+      }
+      if (p.has('i')) {
+        this.initMode = p.get('i');
+        document.getElementById('sel-init').value = this.initMode;
+      }
+      this._reset();
+    } catch(e) { /* ignore bad hashes */ }
+  }
+
+  _exportImage() {
+    const link = document.createElement('a');
+    link.download = `lattice-rule${this.ruleNum}-gen${this.generation}.png`;
+    link.href = this.canvas.toDataURL('image/png');
+    link.click();
   }
 
   _startScheduler() {
