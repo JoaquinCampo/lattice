@@ -66,8 +66,11 @@
       font-weight: 300;
       letter-spacing: 0.3em;
       text-transform: uppercase;
-      color: white;
       margin-bottom: 0.5em;
+      background: linear-gradient(135deg, #9b7bff 0%, #7bb8ff 30%, #00b4d8 60%, #f9a825 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
     #overlay p {
       font-size: clamp(0.75rem, 2vw, 1rem);
@@ -79,6 +82,11 @@
       color: rgba(255,255,255,0.25);
       margin-top: 3em;
       letter-spacing: 0.1em;
+      animation: pulse 3s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.2; }
+      50% { opacity: 0.45; }
     }
 
     /* Info panel - top left */
@@ -559,7 +567,7 @@ class AudioEngine {
   /**
    * Map a cell index to a frequency using the given scale
    */
-  cellToFreq(cellIndex, numCells, scaleIntervals, baseOctave = 3) {
+  cellToFreq(cellIndex, numCells, scaleIntervals, baseOctave = 4) {
     const numOctaves = 3;
     const notesPerOctave = scaleIntervals.length;
     const totalNotes = numOctaves * notesPerOctave + 1;
@@ -729,7 +737,11 @@ class Renderer {
     const W = this.width;
     const H = this.height;
 
-    ctx.fillStyle = '#08080c';
+    // Subtle radial gradient background for depth
+    const bgGrad = ctx.createRadialGradient(W / 2, H * 0.4, 0, W / 2, H * 0.4, W * 0.8);
+    bgGrad.addColorStop(0, '#0e0e18');
+    bgGrad.addColorStop(1, '#08080c');
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, W, H);
 
     if (rows.length === 0) return;
@@ -791,19 +803,23 @@ class Renderer {
         }
 
         // Draw rounded rect
-        const r = Math.max(1, innerSize * 0.15);
+        const r = Math.max(1, Math.min(innerSize * 0.15, 4));
         const cx = x + gap / 2;
         const cy = y + gap / 2;
         ctx.beginPath();
-        ctx.moveTo(cx + r, cy);
-        ctx.lineTo(cx + innerSize - r, cy);
-        ctx.quadraticCurveTo(cx + innerSize, cy, cx + innerSize, cy + r);
-        ctx.lineTo(cx + innerSize, cy + innerSize - r);
-        ctx.quadraticCurveTo(cx + innerSize, cy + innerSize, cx + innerSize - r, cy + innerSize);
-        ctx.lineTo(cx + r, cy + innerSize);
-        ctx.quadraticCurveTo(cx, cy + innerSize, cx, cy + innerSize - r);
-        ctx.lineTo(cx, cy + r);
-        ctx.quadraticCurveTo(cx, cy, cx + r, cy);
+        if (ctx.roundRect) {
+          ctx.roundRect(cx, cy, innerSize, innerSize, r);
+        } else {
+          ctx.moveTo(cx + r, cy);
+          ctx.lineTo(cx + innerSize - r, cy);
+          ctx.arcTo(cx + innerSize, cy, cx + innerSize, cy + r, r);
+          ctx.lineTo(cx + innerSize, cy + innerSize - r);
+          ctx.arcTo(cx + innerSize, cy + innerSize, cx + innerSize - r, cy + innerSize, r);
+          ctx.lineTo(cx + r, cy + innerSize);
+          ctx.arcTo(cx, cy + innerSize, cx, cy + innerSize - r, r);
+          ctx.lineTo(cx, cy + r);
+          ctx.arcTo(cx, cy, cx + r, cy, r);
+        }
         ctx.closePath();
         ctx.fill();
 
