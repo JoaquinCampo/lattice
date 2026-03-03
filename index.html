@@ -338,11 +338,19 @@
   </button>
 
   <div class="ctrl-group">
+    <label>Mode</label>
+    <select class="ctrl-select" id="sel-mode">
+      <option value="1d">1D Rules</option>
+      <option value="life">Game of Life</option>
+    </select>
+  </div>
+
+  <div class="ctrl-group" id="grp-preset">
     <label>Preset</label>
     <select class="ctrl-select" id="sel-preset"></select>
   </div>
 
-  <div class="ctrl-group">
+  <div class="ctrl-group" id="grp-rule">
     <label>Rule</label>
     <select class="ctrl-select" id="sel-rule"></select>
   </div>
@@ -520,6 +528,83 @@ function createInitialRow(width, mode) {
   }
   return row;
 }
+
+// ════════════════════════════════════════════════════════════════
+// GAME OF LIFE ENGINE
+// ════════════════════════════════════════════════════════════════
+
+function evolveLife(grid) {
+  const h = grid.length;
+  const w = grid[0].length;
+  const next = grid.map(() => new Uint8Array(w));
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          n += grid[(y + dy + h) % h][(x + dx + w) % w];
+        }
+      }
+      next[y][x] = grid[y][x] ? (n === 2 || n === 3 ? 1 : 0) : (n === 3 ? 1 : 0);
+    }
+  }
+  return next;
+}
+
+function createLifeGrid(width, height, pattern) {
+  const grid = [];
+  for (let y = 0; y < height; y++) grid.push(new Uint8Array(width));
+  const cx = Math.floor(width / 2);
+  const cy = Math.floor(height / 2);
+  switch (pattern) {
+    case 'random':
+      for (let y = 0; y < height; y++)
+        for (let x = 0; x < width; x++)
+          grid[y][x] = Math.random() < 0.3 ? 1 : 0;
+      break;
+    case 'r-pentomino':
+      grid[cy-1][cx] = grid[cy-1][cx+1] = grid[cy][cx-1] = grid[cy][cx] = grid[cy+1][cx] = 1;
+      break;
+    case 'acorn':
+      const a = cx - 3;
+      grid[cy-1][a+1] = 1;
+      grid[cy][a+3] = 1;
+      grid[cy+1][a] = grid[cy+1][a+1] = grid[cy+1][a+4] = grid[cy+1][a+5] = grid[cy+1][a+6] = 1;
+      break;
+    case 'glider-gun': {
+      // Gosper glider gun (compact placement)
+      const ox = Math.max(2, cx - 18);
+      const oy = Math.max(2, cy - 5);
+      const cells = [
+        [0,24],[1,22],[1,24],[2,12],[2,13],[2,20],[2,21],[2,34],[2,35],
+        [3,11],[3,15],[3,20],[3,21],[3,34],[3,35],[4,0],[4,1],[4,10],[4,16],[4,20],[4,21],
+        [5,0],[5,1],[5,10],[5,14],[5,16],[5,17],[5,22],[5,24],[6,10],[6,16],[6,24],
+        [7,11],[7,15],[8,12],[8,13]
+      ];
+      for (const [dy, dx] of cells) {
+        if (oy + dy < height && ox + dx < width) grid[oy + dy][ox + dx] = 1;
+      }
+      break;
+    }
+    case 'draw':
+      break;
+    default: // single glider
+      grid[cy-1][cx] = 1;
+      grid[cy][cx+1] = 1;
+      grid[cy+1][cx-1] = grid[cy+1][cx] = grid[cy+1][cx+1] = 1;
+  }
+  return grid;
+}
+
+const LIFE_PATTERNS = [
+  { value: 'random', label: 'Random' },
+  { value: 'glider', label: 'Glider' },
+  { value: 'r-pentomino', label: 'R-pentomino' },
+  { value: 'acorn', label: 'Acorn' },
+  { value: 'glider-gun', label: 'Glider Gun' },
+  { value: 'draw', label: 'Draw' },
+];
 
 // ════════════════════════════════════════════════════════════════
 // AUDIO ENGINE
@@ -877,6 +962,66 @@ class Renderer {
       ctx.fillRect(offsetX, playY - cellSize / 2, gridW, cellSize);
     }
   }
+
+  draw2D(grid, numCols, brightness) {
+    const ctx = this.ctx;
+    const W = this.width;
+    const H = this.height;
+
+    const bgGrad = ctx.createRadialGradient(W / 2, H * 0.4, 0, W / 2, H * 0.4, W * 0.8);
+    bgGrad.addColorStop(0, '#0e0e18');
+    bgGrad.addColorStop(1, '#08080c');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    if (!grid || grid.length === 0) return;
+
+    const numRows = grid.length;
+    const padding = Math.max(16, W * 0.03);
+    const controlsH = 70;
+    const topPad = 60;
+    const availW = W - padding * 2;
+    const availH = H - controlsH - topPad;
+    const cellSize = Math.min(Math.floor(availW / numCols), Math.floor(availH / numRows));
+    const gap = Math.max(1, Math.floor(cellSize * 0.08));
+    const innerSize = cellSize - gap;
+    const gridW = cellSize * numCols;
+    const gridH = cellSize * numRows;
+    const offsetX = Math.floor((W - gridW) / 2);
+    const offsetY = Math.floor(topPad + (availH - gridH) / 2);
+
+    for (let y = 0; y < numRows; y++) {
+      for (let x = 0; x < numCols; x++) {
+        const px = offsetX + x * cellSize;
+        const py = offsetY + y * cellSize;
+        const b = brightness ? brightness[y][x] : (grid[y][x] ? 1 : 0);
+
+        if (b > 0.02) {
+          const t = numCols > 1 ? x / (numCols - 1) : 0.5;
+          const { h, s, l } = getCellColor(t);
+          ctx.fillStyle = hslStr(h, s, l * Math.max(0.3, b), b);
+        } else {
+          ctx.fillStyle = 'rgba(255,255,255,0.018)';
+        }
+
+        const r = Math.max(1, Math.min(innerSize * 0.15, 4));
+        const cx = px + gap / 2;
+        const cy = py + gap / 2;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(cx, cy, innerSize, innerSize, r);
+        } else {
+          ctx.moveTo(cx + r, cy);
+          ctx.arcTo(cx + innerSize, cy, cx + innerSize, cy + r, r);
+          ctx.arcTo(cx + innerSize, cy + innerSize, cx + innerSize - r, cy + innerSize, r);
+          ctx.arcTo(cx, cy + innerSize, cx, cy + innerSize - r, r);
+          ctx.arcTo(cx, cy, cx + r, cy, r);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -886,6 +1031,7 @@ class Renderer {
 class App {
   constructor() {
     // State
+    this.mode = '1d'; // '1d' or 'life'
     this.playing = false;
     this.ruleIdx = 0;
     this.ruleNum = RULES[0].num;
@@ -895,7 +1041,11 @@ class App {
     this.tempo = 120;
     this.numCells = 48;
     this.initMode = 'single';
+    this.lifePattern = 'random';
     this.rows = [];
+    this.grid = null;       // 2D grid for Life mode
+    this.brightness = null; // brightness buffer for Life transitions
+    this.gridHeight = 30;   // computed based on viewport
     this.started = false;
 
     // Timing
@@ -978,6 +1128,15 @@ class App {
     // Play/pause
     this.playBtn.addEventListener('click', () => this._togglePlay());
 
+    // Mode change
+    document.getElementById('sel-mode').addEventListener('change', (e) => {
+      this.mode = e.target.value;
+      this._updateModeUI();
+      this._reset();
+      if (this.playing) { this._stopScheduler(); this._startScheduler(); }
+      this._saveToHash();
+    });
+
     // Preset change
     document.getElementById('sel-preset').addEventListener('change', (e) => {
       const idx = parseInt(e.target.value);
@@ -1058,9 +1217,13 @@ class App {
       this._saveToHash();
     });
 
-    // Init mode
+    // Init mode / Life pattern
     document.getElementById('sel-init').addEventListener('change', (e) => {
-      this.initMode = e.target.value;
+      if (this.mode === 'life') {
+        this.lifePattern = e.target.value;
+      } else {
+        this.initMode = e.target.value;
+      }
       this._reset();
       if (this.playing) {
         this._stopScheduler();
@@ -1091,55 +1254,90 @@ class App {
     // Canvas painting — draw initial row by clicking or dragging
     let painting = false;
     let paintValue = 1;
-    let lastPaintCol = -1;
 
-    const canEdit = () => this.started && !this.playing && this.rows.length <= 1;
+    const canEdit = () => {
+      if (!this.started || this.playing) return false;
+      if (this.mode === 'life') return !!this.grid;
+      return this.rows.length <= 1;
+    };
 
     const hitCell = (clientX, clientY) => {
       const rect = this.canvas.getBoundingClientRect();
       const x = clientX - rect.left;
       const y = clientY - rect.top;
-      const { cellSize, offsetX, topPad } = this._getGridLayout();
-      const col = Math.floor((x - offsetX) / cellSize);
-      const row = Math.floor((y - topPad) / cellSize);
-      if (col >= 0 && col < this.numCells && row === 0) return col;
-      return -1;
+
+      if (this.mode === 'life' && this.grid) {
+        const W = this.renderer.width; const H = this.renderer.height;
+        const padding = Math.max(16, W * 0.03);
+        const availW = W - padding * 2;
+        const availH = H - 130;
+        const cellSize = Math.min(Math.floor(availW / this.numCells), Math.floor(availH / this.grid.length));
+        const gridW = cellSize * this.numCells;
+        const gridH = cellSize * this.grid.length;
+        const ox = Math.floor((W - gridW) / 2);
+        const oy = Math.floor(60 + (availH - gridH) / 2);
+        const col = Math.floor((x - ox) / cellSize);
+        const row = Math.floor((y - oy) / cellSize);
+        if (col >= 0 && col < this.numCells && row >= 0 && row < this.grid.length)
+          return { col, row };
+        return null;
+      } else {
+        const { cellSize, offsetX, topPad } = this._getGridLayout();
+        const col = Math.floor((x - offsetX) / cellSize);
+        const row = Math.floor((y - topPad) / cellSize);
+        if (col >= 0 && col < this.numCells && row === 0) return { col, row: 0 };
+        return null;
+      }
     };
 
-    const paintCell = (col) => {
-      if (col < 0 || col === lastPaintCol) return;
-      lastPaintCol = col;
-      this.rows[0][col] = paintValue;
+    let lastPaintKey = '';
+    const paintCell = (hit) => {
+      if (!hit) return;
+      const key = `${hit.col},${hit.row}`;
+      if (key === lastPaintKey) return;
+      lastPaintKey = key;
+
+      if (this.mode === 'life') {
+        this.grid[hit.row][hit.col] = paintValue;
+        if (this.brightness) this.brightness[hit.row][hit.col] = paintValue;
+      } else {
+        this.rows[0][hit.col] = paintValue;
+      }
       if (this.audio.ctx && paintValue) {
-        const freq = this.audio.cellToFreq(col, this.numCells, this.scaleIntervals);
-        const pan = this.numCells > 1 ? (col / (this.numCells - 1)) * 2 - 1 : 0;
+        const freq = this.audio.cellToFreq(hit.col, this.numCells, this.scaleIntervals);
+        const pan = this.numCells > 1 ? (hit.col / (this.numCells - 1)) * 2 - 1 : 0;
         this.audio._playNote(freq, this.audio.ctx.currentTime, 0.25, 0.08, this.voice, pan * 0.5);
       }
     };
 
     const startPaint = (clientX, clientY) => {
       if (!canEdit()) return;
-      const col = hitCell(clientX, clientY);
-      if (col < 0) return;
+      const hit = hitCell(clientX, clientY);
+      if (!hit) return;
       painting = true;
-      lastPaintCol = -1;
-      paintValue = this.rows[0][col] ? 0 : 1;
-      paintCell(col);
+      lastPaintKey = '';
+      // Determine paint mode from clicked cell
+      if (this.mode === 'life') {
+        paintValue = this.grid[hit.row][hit.col] ? 0 : 1;
+      } else {
+        paintValue = this.rows[0][hit.col] ? 0 : 1;
+      }
+      paintCell(hit);
     };
 
     const movePaint = (clientX, clientY) => {
       if (!painting) return;
-      const col = hitCell(clientX, clientY);
-      if (col >= 0) paintCell(col);
+      const hit = hitCell(clientX, clientY);
+      if (hit) paintCell(hit);
     };
 
-    const endPaint = () => { painting = false; lastPaintCol = -1; };
+    const endPaint = () => { painting = false; lastPaintKey = ''; };
 
     // Mouse
     this.canvas.addEventListener('mousedown', (e) => startPaint(e.clientX, e.clientY));
     this.canvas.addEventListener('mousemove', (e) => {
       movePaint(e.clientX, e.clientY);
-      this.canvas.style.cursor = canEdit() && hitCell(e.clientX, e.clientY) >= 0 ? 'crosshair' : 'default';
+      this.canvas.style.cursor = canEdit() && hitCell(e.clientX, e.clientY) ? 'crosshair' : 'default';
     });
     window.addEventListener('mouseup', endPaint);
 
@@ -1241,12 +1439,26 @@ class App {
   }
 
   _reset() {
-    this.rows = [];
-    const initial = createInitialRow(this.numCells, this.initMode);
-    this.rows.push(initial);
-    this.scrollOffset = 0;
     this.generation = 0;
     this.genCount.textContent = '';
+    if (this.mode === 'life') {
+      // Compute grid height from viewport
+      const padding = Math.max(16, this.renderer.width * 0.03);
+      const availW = this.renderer.width - padding * 2;
+      const availH = this.renderer.height - 130;
+      const cellSize = Math.min(Math.floor(availW / this.numCells), 20);
+      this.gridHeight = Math.max(12, Math.floor(availH / cellSize));
+      this.grid = createLifeGrid(this.numCells, this.gridHeight, this.lifePattern);
+      this.brightness = this.grid.map(row => Float32Array.from(row));
+      this.rows = [];
+    } else {
+      this.rows = [];
+      const initial = createInitialRow(this.numCells, this.initMode);
+      this.rows.push(initial);
+      this.grid = null;
+      this.brightness = null;
+    }
+    this.scrollOffset = 0;
     this._updateEditHint();
   }
 
@@ -1273,9 +1485,44 @@ class App {
   }
 
   _updateEditHint() {
-    const canEdit = this.started && !this.playing && this.rows.length <= 1;
+    const canEdit = this.started && !this.playing &&
+      (this.mode === 'life' ? !!this.grid : this.rows.length <= 1);
     this.editHint.classList.toggle('visible', canEdit);
-    this.canvas.style.cursor = canEdit ? 'crosshair' : 'default';
+    this.editHint.textContent = this.mode === 'life'
+      ? 'click or drag to draw cells'
+      : 'click cells to set starting pattern';
+  }
+
+  _updateModeUI() {
+    const is1D = this.mode === '1d';
+    document.getElementById('grp-rule').style.display = is1D ? '' : 'none';
+    document.getElementById('grp-preset').style.display = is1D ? '' : 'none';
+    // Update init options
+    const selInit = document.getElementById('sel-init');
+    selInit.innerHTML = '';
+    if (is1D) {
+      ['single', 'random', 'alternating', 'thirds', 'draw'].forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = v === 'single' ? 'Single Cell' : v === 'draw' ? 'Draw' : v.charAt(0).toUpperCase() + v.slice(1);
+        if (v === 'thirds') opt.textContent = 'Every Third';
+        selInit.appendChild(opt);
+      });
+      selInit.value = this.initMode;
+    } else {
+      LIFE_PATTERNS.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.value; opt.textContent = p.label;
+        selInit.appendChild(opt);
+      });
+      selInit.value = this.lifePattern;
+    }
+    // Update rule info
+    if (!is1D) {
+      this.ruleLabel.textContent = "Conway's Game of Life";
+      this.ruleDesc.textContent = 'Birth on 3 neighbors, survival on 2-3';
+    } else {
+      this._updateRuleInfo();
+    }
   }
 
   _getGridLayout() {
@@ -1292,8 +1539,9 @@ class App {
 
   _saveToHash() {
     const p = new URLSearchParams({
-      r: this.ruleNum, s: this.scaleName, v: this.voice,
-      t: this.tempo, c: this.numCells, i: this.initMode,
+      m: this.mode, r: this.ruleNum, s: this.scaleName, v: this.voice,
+      t: this.tempo, c: this.numCells,
+      i: this.mode === 'life' ? this.lifePattern : this.initMode,
     });
     history.replaceState(null, '', '#' + p.toString());
   }
@@ -1330,9 +1578,18 @@ class App {
         document.getElementById('rng-cells').value = this.numCells;
         document.getElementById('val-cells').textContent = this.numCells;
       }
+      if (p.has('m') && (p.get('m') === '1d' || p.get('m') === 'life')) {
+        this.mode = p.get('m');
+        document.getElementById('sel-mode').value = this.mode;
+        this._updateModeUI();
+      }
       if (p.has('i')) {
-        this.initMode = p.get('i');
-        document.getElementById('sel-init').value = this.initMode;
+        if (this.mode === 'life') {
+          this.lifePattern = p.get('i');
+        } else {
+          this.initMode = p.get('i');
+        }
+        document.getElementById('sel-init').value = p.get('i');
       }
       this._reset();
     } catch(e) { /* ignore bad hashes */ }
@@ -1350,10 +1607,12 @@ class App {
     this.nextNoteTime = this.audio.ctx.currentTime + 0.05;
     this.lastBeatTime = this.nextNoteTime;
 
-    // Play the current initial row first
+    // Play the current state first
     const beatDur = 60.0 / this.tempo;
-    const currentRow = this.rows[this.rows.length - 1];
-    this.audio.playRow(currentRow, this.scaleIntervals, this.voice, this.nextNoteTime, beatDur);
+    if (this.mode === '1d' && this.rows.length > 0) {
+      this.audio.playRow(this.rows[this.rows.length - 1], this.scaleIntervals, this.voice, this.nextNoteTime, beatDur);
+    }
+    // Life mode: first tick will play after evolution
     this.lastBeatTime = this.nextNoteTime;
     this.nextNoteTime += beatDur;
 
@@ -1379,37 +1638,97 @@ class App {
   }
 
   _tick(time) {
-    // Evolve the CA
+    if (this.mode === 'life') {
+      this._tickLife(time);
+    } else {
+      this._tick1D(time);
+    }
+  }
+
+  _tick1D(time) {
     const lastRow = this.rows[this.rows.length - 1];
     const nextRow = evolveRow(lastRow, this.ruleNum);
     this.rows.push(nextRow);
     this.generation++;
     this.genCount.textContent = `Generation ${this.generation}`;
 
-    // Play audio for the new row
     const beatDur = 60.0 / this.tempo;
     this.audio.playRow(nextRow, this.scaleIntervals, this.voice, time, beatDur);
 
-    // Limit stored rows to prevent memory growth
     const maxRows = 500;
     if (this.rows.length > maxRows) {
       this.rows = this.rows.slice(this.rows.length - maxRows);
     }
   }
 
-  _render() {
-    // Calculate scroll offset for smooth animation
-    let scrollOff = 0;
-    if (this.playing && this.audio.ctx) {
-      const beatDur = 60.0 / this.tempo;
-      const elapsed = this.audio.ctx.currentTime - this.lastBeatTime;
-      const padding = Math.max(16, this.renderer.width * 0.03);
-      const availW = this.renderer.width - padding * 2;
-      const cellSize = Math.floor(availW / this.numCells);
-      scrollOff = Math.min((elapsed / beatDur) * cellSize, cellSize);
+  _tickLife(time) {
+    this.grid = evolveLife(this.grid);
+    this.generation++;
+    this.genCount.textContent = `Generation ${this.generation}`;
+
+    if (!this.audio.ctx) return;
+    const beatDur = 60.0 / this.tempo;
+    const numRows = this.grid.length;
+    const numCols = this.grid[0].length;
+
+    // Count alive cells per column
+    const colCounts = new Array(numCols).fill(0);
+    for (let y = 0; y < numRows; y++)
+      for (let x = 0; x < numCols; x++)
+        colCounts[x] += this.grid[y][x];
+
+    // Collect active columns
+    const active = [];
+    for (let x = 0; x < numCols; x++)
+      if (colCounts[x] > 0) active.push({ col: x, count: colCounts[x] });
+
+    if (active.length === 0) return;
+
+    // Limit simultaneous notes
+    const maxNotes = 16;
+    let toPlay = active;
+    if (active.length > maxNotes) {
+      toPlay = [];
+      for (let i = 0; i < maxNotes; i++)
+        toPlay.push(active[Math.floor(i * active.length / maxNotes)]);
     }
 
-    this.renderer.draw(this.rows, this.numCells, this.rows.length - 1, scrollOff, this.playing);
+    const density = active.length / numCols;
+    const baseDur = Math.min(beatDur * 2, 1.5);
+    const noteDur = baseDur * Math.max(0.3, 1 - density * 0.5);
+
+    for (const { col, count } of toPlay) {
+      const freq = this.audio.cellToFreq(col, numCols, this.scaleIntervals);
+      const vol = Math.min(0.2, 0.04 + (count / numRows) * 0.16);
+      const pan = numCols > 1 ? (col / (numCols - 1)) * 2 - 1 : 0;
+      this.audio._playNote(freq, time, noteDur, vol, this.voice, pan * 0.65);
+    }
+  }
+
+  _render() {
+    if (this.mode === 'life') {
+      // Update brightness transitions
+      if (this.grid && this.brightness) {
+        for (let y = 0; y < this.grid.length; y++) {
+          for (let x = 0; x < this.grid[0].length; x++) {
+            const target = this.grid[y][x] ? 1 : 0;
+            this.brightness[y][x] += (target - this.brightness[y][x]) * 0.18;
+          }
+        }
+      }
+      this.renderer.draw2D(this.grid, this.numCells, this.brightness);
+    } else {
+      let scrollOff = 0;
+      if (this.playing && this.audio.ctx) {
+        const beatDur = 60.0 / this.tempo;
+        const elapsed = this.audio.ctx.currentTime - this.lastBeatTime;
+        const padding = Math.max(16, this.renderer.width * 0.03);
+        const availW = this.renderer.width - padding * 2;
+        const cellSize = Math.floor(availW / this.numCells);
+        scrollOff = Math.min((elapsed / beatDur) * cellSize, cellSize);
+      }
+      this.renderer.draw(this.rows, this.numCells, this.rows.length - 1, scrollOff, this.playing);
+    }
     requestAnimationFrame(() => this._render());
   }
 }
